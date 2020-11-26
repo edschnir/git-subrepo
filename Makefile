@@ -1,4 +1,6 @@
-# Make sure we have 'git' and it works OK:
+SHELL := bash
+
+# Make sure we have git:
 ifeq ($(shell which git),)
   $(error 'git' is not installed on this system)
 endif
@@ -19,6 +21,18 @@ INSTALL_LIB  ?= $(DESTDIR)$(shell git --exec-path)
 INSTALL_EXT  ?= $(INSTALL_LIB)/$(NAME).d
 INSTALL_MAN1 ?= $(DESTDIR)$(PREFIX)/share/man/man1
 
+# Docker variables:
+DOCKER_TAG ?= 0.0.4
+DOCKER_IMAGE := ingy/bash-testing:$(DOCKER_TAG)
+BASH_VERSIONS ?= 5.1 5.0 4.4 4.3 4.2 4.1 4.0
+DOCKER_TESTS := $(BASH_VERSIONS:%=docker-test-%)
+GIT_VERSIONS := 2.29 2.25 2.17 2.7
+
+prove ?=
+test ?= test/
+bash ?= 5.0
+git ?= 2.29
+
 # Basic targets:
 default: help
 
@@ -32,15 +46,25 @@ help:
 
 .PHONY: test
 test:
-	prove $(PROVEOPT:%=% )test/
+	prove $(prove) $(test)
+
+test-all: test docker-tests
+
+docker-test:
+	$(call docker-make-test,$(bash),$(git))
+
+docker-tests: $(DOCKER_TESTS)
+
+$(DOCKER_TESTS):
+	$(call docker-make-test,$(@:docker-test-%=%),$(git))
 
 # Install support:
 install:
-	install -C -d -m 0755 $(INSTALL_LIB)/
+	install -d -m 0755 $(INSTALL_LIB)/
 	install -C -m 0755 $(LIB) $(INSTALL_LIB)/
-	install -C -d -m 0755 $(INSTALL_EXT)/
+	install -d -m 0755 $(INSTALL_EXT)/
 	install -C -m 0755 $(EXTS) $(INSTALL_EXT)/
-	install -C -d -m 0755 $(INSTALL_MAN1)/
+	install -d -m 0755 $(INSTALL_MAN1)/
 	install -C -m 0644 $(MAN1)/$(NAME).1 $(INSTALL_MAN1)/
 
 # Uninstall support:
@@ -57,24 +81,42 @@ env:
 .PHONY: doc
 update: doc compgen
 
+force:
+
 doc: ReadMe.pod Intro.pod $(MAN1)/$(NAME).1
 	perl pkg/bin/generate-help-functions.pl $(DOC) > \
 	    $(EXT)/help-functions.bash
 
-ReadMe.pod: $(DOC)
+ReadMe.pod: $(DOC) force
 	swim --to=pod --wrap --complete $< > $@
 
-Intro.pod: doc/intro-to-subrepo.swim
+Intro.pod: doc/intro-to-subrepo.swim force
 	swim --to=pod --wrap --complete $< > $@
 
-$(MAN1)/%.1: doc/%.swim Makefile
+$(MAN1)/%.1: doc/%.swim Makefile force
 	swim --to=man --wrap $< > $@
 
-compgen:
+compgen: force
 	perl pkg/bin/generate-completion.pl bash $(DOC) $(LIB) > \
 	    $(SHARE)/completion.bash
 	perl pkg/bin/generate-completion.pl zsh $(DOC) $(LIB) > \
 	    $(SHARE)/zsh-completion/_git-subrepo
 
-clean purge:
-	rm -fr tmp
+clean:
+	rm -fr tmp test/tmp
+
+define docker-make-test
+	docker run -i -t --rm \
+	    -v $(PWD):/git-subrepo \
+	    -w /git-subrepo \
+	    $(DOCKER_IMAGE) \
+		/bin/bash -c ' \
+		    set -x && \
+		    [[ -d /bash-$(1) ]] && \
+		    [[ -d /git-$(2) ]] && \
+		    export PATH=/bash-$(1)/bin:/git-$(2)/bin:$$PATH && \
+		    bash --version && \
+		    git --version && \
+		    make test prove=$(prove) test=$(test) \
+		'
+endef
